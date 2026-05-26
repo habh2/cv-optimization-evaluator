@@ -1,103 +1,166 @@
 # CV Optimizer Agent — Design
 
-## Goals
+## Goal
 
-Produce a tailored CV that demonstrates meaningful improvement over:
-1. The unmodified master CV against the target JD
-2. The best available single-LLM public skill run on the same input
+Score and compare CV baselines against a target JD, and produce specific, actionable feedback per scoring dimension per baseline. Baselines are generated manually outside the tool — the pipeline only evaluates them.
 
-"Meaningful improvement" means headroom exists on at least one scoring dimension — not raw supremacy over an unbounded competitor pool.
+> Low-level details (state schema, agent interfaces, file structure) live in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ---
 
-## Two Modes of Operation
+## File Convention
 
-### Evaluate mode
-Runs the JD + master CV through a set of publicly available single-LLM resume skills and scores each output. Purpose: establish whether optimisation is worth running at all.
+Baseline CVs are generated manually (via Claude Code skills, direct LLM prompts, etc.) and dropped into a structured folder. The pipeline discovers, validates, and scores whatever it finds there.
 
-**Baseline pool (examples):**
-- [Composio Tailored Resume Generator](https://github.com/ComposioHQ/awesome-claude-skills/blob/master/tailored-resume-generator/SKILL.md) — priority-mapped keyword alignment + ATS optimisation
-- Additional public skills added as discovered
-
-Each skill output is scored using the same Scorer rubric. Results are logged: which skill won, by how much, on which dimensions.
-
-**Saturation warning:** If the best baseline already scores above a configurable threshold (default: 85/100) *and* all scoring dimensions show less than 10 points of headroom, the system warns:
-
-> "Best public skill scored X/100. Dimensions with remaining headroom: [achievement_specificity: +8, readability: +3]. Running the optimisation pipeline is unlikely to add meaningful value. Proceed? [y/N]"
-
-The warning surfaces *which dimensions* are saturated, not just the raw score. A user may choose to proceed specifically to close the remaining gap on one dimension.
-
-**Baselines are cached per JD hash.** If the same JD is used for a second run, cached baselines are reused without re-calling the public skills. Re-evaluation can be forced explicitly.
-
-### Optimise mode
-Runs the full multi-agent pipeline. Requires either a prior evaluate run for this JD or acceptance of cached baselines. The pipeline's output must demonstrate headroom improvement over the best baseline — if it doesn't, the run is flagged as "no improvement over best public skill."
-
----
-
-## High-Level Workflow (Optimise Mode)
+### Directory structure
 
 ```
-JD + master CV
+data/inputs/
+  CV.md                          ← master CV (always scored as baseline)
+  JobDescription.txt             ← current JD
+  baselines/
+    {jd_id}/                     ← one folder per job application (user-defined name)
+      {skill_id}/                ← one subfolder per skill used
+        {model}__{version}.txt   ← one file per model × version combination
+```
+
+**Example:**
+
+```
+data/inputs/baselines/
+  ml_eng_google/
+    composio_tailored/
+      gemini-2.5-flash__v1.txt
+      claude-sonnet-4-6__v1.txt
+    my_custom_prompt/
+      gemini-2.5-flash__v2.txt
+  backend_swe_stripe/
+    composio_tailored/
+      gemini-2.5-flash__v1.txt
+```
+
+### Filename rules
+
+The file inside each `{skill_id}/` folder must match: `{model}__{version}.txt`
+
+- `model` — the model identifier as it appears in the provider's API (e.g. `gemini-2.5-flash`, `claude-sonnet-4-6`)
+- `version` — the prompt/skill version used (e.g. `v1`, `v2`); must be bumped whenever the skill prompt changes
+- Separator is double underscore (`__`); single underscores within each part are fine
+- Files that don't match this pattern are rejected with an error at load time
+
+Valid skill IDs and their display names are defined in `skills_registry.py`. An unknown `{skill_id}` folder logs a warning and is skipped.
+
+### Invocation
+
+```
+python graph.py --run {jd_id}
+```
+
+The `{jd_id}` argument tells the pipeline which subfolder of `baselines/` to load. The JD and master CV are always read from their standard paths.
+
+---
+
+## High-Level Workflow
+
+```
+python graph.py --run {jd_id}
       │
       ▼
 ┌─────────────┐
-│   Intake    │  Parse & normalise inputs; compute JD hash for cache lookup
+│   Intake    │  Load JD + master CV; resolve baselines/{jd_id}/; check cache
 └──────┬──────┘
        │
        ▼
-┌─────────────┐
-│ JD Analyzer │  Extract: required skills, keywords, seniority signals, tone
-└──────┬──────┘
+┌──────────────┐
+│ JD Analyzer  │  Extract: must-haves, nice-to-haves, seniority, keywords, tone
+└──────┬───────┘          (gives the scorer structured JD context)
        │
        ▼
-┌─────────────┐
-│ Gap Analyzer│  Diff CV vs JD; query RAG for similar past runs (see RAG Design)
-└──────┬──────┘
+┌──────────────┐
+│ Gap Analyzer │  Diff master CV vs JD; query RAG for similar past runs
+└──────┬───────┘
        │
        ▼
-┌─────────────────────┐
-│  ATS / Keyword      │  Add/naturalise JD keywords
-├─────────────────────┤
-│  Achievements       │  Quantify and rewrite bullets (operates on content,
-├─────────────────────┤   not structure — safe before Relevance)
-│  Relevance          │  Reorder and trim based on JD priority
-├─────────────────────┤
-│  Tone / Voice       │  Align register to JD tone; harmonise full document
-└──────────┬──────────┘
-           │
-           ▼
-  ┌─────────────────┐
-  │  AI-Phrase Gate │  detect → rewrite in-place → re-detect (max 2 rewrites)
-  └────────┬────────┘  if still failing: abort run, report flagged phrases
-           │ pass
-           ▼
-  ┌─────────────────┐
-  │     Scorer      │  Structured rubric score vs JD
-  └────────┬────────┘
-           │
-    ┌──────┴──────────────────────┐
-score ≥ threshold          score < threshold
-    │                            │
-    ▼                     score still improving?
- Output                yes → route to agent responsible
-                              for weakest dimension (max 3 iterations)
-                        no → abort, output best so far with plateau warning
+┌──────────────────────────────────────┐
+│  Load Baselines                      │
+│  Discover + validate files under     │
+│  baselines/{jd_id}/                  │
+│  master_cv always included           │
+└──────────────┬───────────────────────┘
+               │
+               ▼
+┌──────────────────────────────────────┐
+│  Score All                           │
+│  For each baseline:                  │
+│    LLM-as-judge → 5 dimension scores │
+│    + per-dimension feedback text     │
+└──────────────┬───────────────────────┘
+               │
+               ▼
+┌──────────────┐
+│    Report    │  Comparison table + feedback report; save to cache
+└──────────────┘
 ```
 
 ---
 
-## Agent Responsibilities & Ordering Rationale
+## Scoring Dimensions
 
-| Agent | Responsibility | Why this position |
-|---|---|---|
-| **JD Analyzer** | Extracts structured requirements: must-haves, nice-to-haves, seniority, domain keywords, tone signals | Must precede everything — all downstream agents depend on its output |
-| **Gap Analyzer** | Diffs CV vs JD requirements; queries RAG; outputs prioritised gap list | Needs JD analysis; its gap list is the agenda for refinement agents |
-| **ATS / Keyword** | Ensures JD keywords appear naturally; avoids stuffing | Runs first in refinement — establishes vocabulary that Achievements and Relevance agents can build on |
-| **Achievements** | Rewrites bullets to be specific, quantified, impact-first | Runs before Relevance — rewrites content *before* Relevance decides what to keep; wasted work if reversed |
-| **Relevance** | Reorders and trims sections so JD-relevant experience leads | Runs after Achievements so it operates on already-improved content |
-| **Tone / Voice** | Aligns register to JD tone (startup vs enterprise); fixes passive voice; harmonises language introduced by prior agents | Last in chain — prior agents may introduce strong action verbs or restructured bullets that don't yet match the target register; acts as a final harmonising pass over the whole document |
-| **AI-Phrase Gate** | Uses [`avoid-ai-writing`](https://github.com/conorbronsdon/avoid-ai-writing) pattern: detect → rewrite in-place → re-detect. Hard abort after 2 failed rewrites | After all content agents, before scoring — gate is self-contained so Tone/Voice stays focused on register |
-| **Scorer** | LLM-as-judge: returns structured score breakdown | Final evaluation; prompt is version-locked (see Scoring section) |
+Each baseline is scored on five dimensions (0–10 each). Total = average × 10 → 0–100.
+
+| Dimension | What it measures |
+|---|---|
+| **Keyword coverage** | % of JD must-have and nice-to-have keywords present naturally |
+| **Achievement specificity** | Ratio of quantified, impact-first bullets vs vague statements |
+| **JD alignment** | How well the CV summary and key bullets match JD requirements |
+| **Readability** | Sentence clarity, active voice, ATS-safe formatting |
+| **AI / human voice** | Whether the language sounds authentically human vs AI-generated |
+
+The AI / human voice dimension uses the [`avoid-ai-writing`](https://github.com/conorbronsdon/avoid-ai-writing) pattern — detect AI-isms and flag locations — adapted as a scorer sub-prompt. Detection is model-agnostic.
+
+---
+
+## Feedback Structure
+
+Each dimension returns a score and a short actionable feedback string. Examples of expected tone:
+
+- *Keyword coverage*: "Missing 'distributed systems' and 'MLOps' which appear 4× in the JD. Uses 'machine learning' where JD consistently says 'ML pipelines' — align terminology."
+- *Achievement specificity*: "3 of 7 bullets are vague ('contributed to', 'helped with'). Rewrite using: action verb + what + how/why + result."
+- *AI / human voice*: "'Results-driven professional' and 'passionate about' are common AI tells. Bullet 4 reads as templated — rephrase in the candidate's natural register."
+
+---
+
+## Scorer Design
+
+### Prompt (version-locked)
+
+One LLM-as-judge call per baseline returns all five dimension scores and feedback in a single structured JSON response. Prompt is version-locked (`SCORER_VERSION`); cached results store the version alongside scores so a prompt change invalidates the relevant cache entries.
+
+### Cache schema
+
+Cached per `{jd_id}_{scorer_version}`:
+
+```json
+{
+  "ml_eng_google_v1.0": {
+    "date": "<ISO date>",
+    "baselines": {
+      "master_cv": {
+        "keyword_coverage":        { "score": 7, "feedback": "..." },
+        "achievement_specificity": { "score": 6, "feedback": "..." },
+        "jd_alignment":            { "score": 8, "feedback": "..." },
+        "readability":             { "score": 9, "feedback": "..." },
+        "voice":                   { "score": 8, "feedback": "..." },
+        "total": 76.0
+      },
+      "composio_tailored/gemini-2.5-flash__v1": {
+        "keyword_coverage":        { "score": 9, "feedback": "..." },
+        ...
+      }
+    }
+  }
+}
+```
 
 ---
 
@@ -105,125 +168,51 @@ score ≥ threshold          score < threshold
 
 ### What is stored
 
-Each completed run persists a **run artifact** to the vector store — not the full CV text, but the decisions the pipeline made and whether they worked:
+Each completed evaluation run persists a **run artifact**:
 
 ```
 {
-  jd_embedding:       <vector>,
-  role_category:      "ml-engineer" | "backend-swe" | ...,   // inferred by JD Analyzer
-  cumulative_diff:    [ {agent, section, before, after}, ... ],
-  score_breakdown:    {keyword, achievement, alignment, readability},
-  outcome:            "contacted" | "rejected" | "no_response" | null,
-  date:               <ISO date>
+  jd_id:          "ml_eng_google",
+  jd_embedding:   <vector>,
+  role_category:  "ml-engineer" | "backend-swe" | ...,  // inferred by JD Analyzer
+  scores:         { baseline_id: { per-dimension scores and totals } },
+  best_baseline:  <baseline_id>,
+  outcome:        "contacted" | "rejected" | "no_response" | null,
+  date:           <ISO date>
 }
 ```
 
-`role_category` is inferred by the JD Analyzer from the JD text — it is not user-provided. The taxonomy is a fixed list; unknown roles fall back to a generic category rather than blocking the run.
+`role_category` is inferred by the JD Analyzer. Unknown roles fall back to a generic category.
 
 Outcome starts as `null` and is updated when career-ops syncs `applications.md`.
 
-### What is retrieved
+### Retrieval
 
-At Gap Analysis, given the current JD embedding, retrieve the top-k most similar past run artifacts filtered by:
-- Same role category
-- Outcome = `contacted` (primary), fallback to `no_response` if insufficient contacted examples
+At Gap Analysis, retrieve top-k most similar past runs by role category + cosine similarity. If best match falls below a similarity threshold, skip retrieval — Gap Analyzer runs on JD + master CV alone.
+
+Retrieval weighted by outcome: `contacted` > `no_response` > `rejected`.
 
 ### How it is used
 
-The retrieved artifacts answer: *for similar JDs that led to contact, what did the pipeline emphasise?* Concretely:
-- Which scoring dimensions had the most headroom that got closed (e.g. achievement_specificity improved most)
-- What types of changes appeared most in the diffs (e.g. "quantified metrics added to 4+ bullets", "section reordered to lead with relevant project")
-
-This shapes the Gap Analyzer's output directly: the gap list it produces is prioritised according to the historical signal — "for this role type, achievement specificity gap ranks above keyword coverage gap." Refinement agents consume the same weighted gap list they always would; RAG reaches them indirectly through the Gap Analyzer's output, not through separate context injection. This keeps refinement agents single-purpose and decoupled from the RAG layer.
-
-### Cold-start & low-signal handling
-
-Retrieval is attempted on every run, but the trigger for using it is **similarity threshold**, not a count of past runs. If the best-matching artifact falls below a cosine similarity threshold, retrieval is skipped entirely — the Gap Analyzer runs on JD + CV alone, exactly as it would with an empty store.
-
-This avoids the failure mode of having many past runs that are superficially similar (e.g. many "backend engineer" runs) but semantically wrong for the current JD (e.g. "ML platform engineer"). Low-confidence retrieval can steer the gap list toward the wrong emphasis patterns, which is worse than no signal.
-
-When retrieval is skipped, the run summary states: "RAG not used — no sufficiently similar past runs found." The pipeline's behaviour is identical to a cold-start; the difference is invisible to downstream agents.
+Retrieved artifacts annotate the report: "for similar ML Engineer roles, keyword coverage was the strongest differentiator between contacted and not contacted." This is display context only — RAG does not influence scores.
 
 ### Outcome ingestion
 
-career-ops `applications.md` is the source of truth for outcomes. At the start of each optimise run, the tool checks for new outcome records in `applications.md` and upserts them into the vector store (keyed by JD hash + run ID) before retrieval runs. This means outcomes recorded since the last run are always available without a separate manual sync step.
-
----
-
-## AI-Phrase Gate
-
-The gate follows the detect → rewrite → re-detect pattern established by the [`avoid-ai-writing`](https://github.com/conorbronsdon/avoid-ai-writing) Claude Code skill. The skill is a reference implementation for the gate prompt — the pipeline calls the LLM API directly, so the gate is model-agnostic (Claude, Gemini, or any capable model can run it).
-
-1. **Detect**: scan the draft for AI-isms and flag them with locations
-2. If issues found → **Rewrite**: fix flagged phrases in-place
-3. Re-run detection to confirm clean. Max 2 rewrite attempts.
-4. If still failing: **run aborts** with a report of the flagged phrases
-
-This makes the gate self-contained: it detects and fixes without delegating back to Tone/Voice. Tone/Voice agent is now purely responsible for tone/register alignment — cleaner separation of concerns.
-
-Runs before scoring — scorer never evaluates AI-sounding text. Failing open is not acceptable.
+At run start, the tool checks `career-ops/applications.md` for new outcome records and upserts them into the vector store before retrieval runs.
 
 ---
 
 ## Observability
 
-**Core question:** *What changes were applied at each stage, and where did the score land?*
+**Core question:** *What did each baseline get right and wrong, and how does it compare across skills and models?*
 
-**Approach:**
-- Each agent appends its changes to a **cumulative diff** — a list of `{agent, section, before, after}` records representing all changes since master CV up to this point in the pipeline
-- The Scorer returns a structured breakdown `{keyword_score, achievement_score, alignment_score, readability_score}` at each scored iteration
-- Run summary: ordered list of per-agent cumulative diffs + score snapshot at each checkpoint
+**Output:**
 
-**What the observability layer answers:**
-- How did the CV evolve through the pipeline, step by step?
-- At what point did the score cross the threshold?
-- Did the AI-Phrase Gate trigger, and what was replaced?
-- Did the pipeline plateau? At what iteration?
+1. **Comparison table** — one row per baseline, one column per dimension + total
+2. **Feedback report** — per baseline × dimension: score + actionable feedback text
+3. **RAG annotation** (when available) — which dimensions were most predictive for similar roles
 
-**Tooling:** LangSmith for trace capture — each agent invocation is a named span with diffs and score breakdowns attached as metadata. **Fallback:** on LangSmith unavailability, a structured JSON run log is written locally so traces are never silently lost.
-
----
-
-## Scoring
-
-### Rubric
-
-| Dimension | What it measures |
-|---|---|
-| Keyword coverage | % of JD must-have and nice-to-have keywords present |
-| Achievement specificity | Ratio of quantified bullets vs vague statements |
-| JD alignment | Semantic similarity of CV summary + top bullets to JD requirements |
-| Readability | Sentence length, active voice ratio, ATS-safe formatting signals |
-
-### Prompt versioning
-
-The scorer's system prompt is a versioned artifact. The baseline cache stores scores alongside the prompt version used to produce them:
-
-```
-{
-  jd_hash:               <full-text hash of JD>,
-  scorer_prompt_version: "v1.2",
-  scores:                { skill_A: {keyword, achievement, alignment, readability}, ... },
-  date:                  <ISO date>
-}
-```
-
-At the start of every optimise run, if the cached baselines were computed with a different scorer prompt version than the current one, the cache is stale and re-evaluation is forced before the pipeline runs. This ensures pipeline output and baselines are always scored by the same rubric.
-
-The JD hash is a full-text hash. For the same role at two different companies with near-identical JDs, users can force re-evaluation explicitly — the default is to reuse the cache.
-
-### Baselines
-
-1. Master CV vs JD → raw baseline
-2. Each public skill's output vs JD → skill baselines (cached with scorer prompt version)
-
-Pipeline output must show headroom improvement over the best skill baseline on at least one dimension. If it doesn't, the run is flagged.
-
----
-
-## Cost & Latency
-
-A single optimise run makes approximately 6–8 LLM calls (one per agent + scorer per iteration). Evaluate mode adds ~2–4 calls per public skill, but these are cached per JD hash and only re-run on explicit request. A typical full workflow (evaluate + optimise) is 10–15 LLM calls — acceptable for a human-initiated, async tool.
+**Tooling:** LangSmith for trace capture. **Fallback:** structured JSON run log written locally on every run.
 
 ---
 
@@ -231,17 +220,14 @@ A single optimise run makes approximately 6–8 LLM calls (one per agent + score
 
 | Decision | Alternative considered | Rationale |
 |---|---|---|
-| Two-mode design with saturation warning | Always run pipeline | Honest about when the pipeline adds no value; the warning is itself a portfolio-worthy design decision |
-| Store run artifacts, not full CV text | Store full CVs | Run artifacts are the actionable signal; full CV storage is unnecessary and privacy-awkward |
-| RAG signal shapes Gap Analyzer output only | RAG informs individual refinement agents directly | Centralising signal at Gap Analysis keeps refinement agents single-purpose and decoupled from the RAG layer |
-| Sequential refinement with justified ordering | Parallel with merge | Sequential allows compounding; ordering is non-arbitrary (see table above) |
-| Feedback loop routes to weakest-dimension agent | Re-run full chain | Targeted retry avoids regressing already-good dimensions and reduces token cost per iteration |
-| Gate uses `avoid-ai-writing` pattern (model-agnostic) | Static blocklist | Pattern-based detection catches evolving AI-isms beyond any fixed list; model-agnostic so gate node can run on Claude, Gemini, or any capable LLM |
-| Gate aborts on persistent failure | Fails open | Failing open corrupts scores; abort with report is the correct failure mode |
-| Scorer prompt is version-locked and co-cached with baselines | Ad hoc scoring prompt | Ensures pipeline output and baselines are always compared under the same rubric |
-| LangSmith + local JSON fallback | LangSmith only | Trace data is load-bearing for observability claims; silent loss is unacceptable |
-| Retrieval gated by similarity threshold | Gated by run count | Count-based gate fails when existing runs are for superficially similar but semantically wrong roles |
-| Baselines cached per JD hash | Re-run baselines every time | Avoids redundant calls; re-evaluation available on demand |
+| User generates baselines manually | Pipeline calls LLMs to generate | Simpler pipeline; user controls prompt wording, model, and timing directly |
+| Skill × model encoded in file path | Single flat folder | Path structure is self-documenting and browsable; avoids filename collisions |
+| Double-underscore separator in filename | Single underscore or dash | Allows single underscores within model IDs (e.g. `gemini-2.5-flash`) without ambiguity |
+| Version in filename, not in a manifest | Separate metadata file | Filename is self-contained; no manifest to keep in sync |
+| Pipeline rejects invalid filenames | Silent skip | Fail-fast prevents silently missing a baseline due to a typo |
+| `avoid-ai-writing` pattern for voice dimension | Static blocklist | Pattern-based detection catches evolving AI-isms; model-agnostic |
+| RAG annotates report, does not influence scores | RAG influences scoring weights | Keeps scoring model-agnostic and avoids feedback loops in evaluation |
+| Scorer prompt co-cached with results | Separate version tracking | Ensures cached scores are always comparable to the current scoring prompt |
 
 ---
 
@@ -249,12 +235,12 @@ A single optimise run makes approximately 6–8 LLM calls (one per agent + score
 
 ```
 cv-optimizer-agent
-  └── outputs ResultCV.txt
+  └── outputs ResultCV.txt (best-scoring baseline)
         └── career-ops /career-ops pdf → ATS-clean PDF
 
 Shared state:
   - cv.md (master CV) read by both tools via symlink
-  - career-ops applications.md → outcome sync at run start → vector store (updates run artifact outcome field)
+  - career-ops applications.md → outcome sync at run start → vector store
 ```
 
-Tools are intentionally decoupled — cv-optimizer-agent does not depend on career-ops at runtime.
+Tools are decoupled — cv-optimizer-agent does not depend on career-ops at runtime.

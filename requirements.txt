@@ -4,3 +4,4 @@ langchain-ollama
 langchain-google-genai
 langsmith
 python-dotenv
+chromadb

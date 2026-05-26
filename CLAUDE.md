@@ -1,8 +1,8 @@
-# CV Optimizer Agent — Project Context
+# CV Optimization evaluator — Project Context
 
 ## Project description
 
-A multi-agent CV optimizer. Takes a job description + master CV, runs drafts through refinement agents, and outputs a single best-scoring CV. Human voice is enforced by a AI-phrase gate before LLM scoring.
+A multi-agent CV evaluator. Takes a job description and a master cv, and outputs detailed feedback. Human voice is enforced by a AI-phrase gate.
 
 ## Porfolio goal
 
@@ -17,9 +17,8 @@ Demonstrates LangGraph multi-agent patterns, RAG, prod AI agent design, and LLM 
 
 ## Non-negotiable requirements:
 - The design must align with ALL the portfolio goals since the objective is to showcase those skills.
-- The objective of the optimizer is to produce a resume that scores better than the master resume for a given job description. The optimizer should also provide a better result than just passing the resume + the JD + instructions to a single LLM call (I am thinking of Claude skills focused on improving resumes).
-- Some resumes will be actually sent to their respective job applications which may result in no response, explicit rejection, or being contacted. I want this data to influence future runs so that the agent know what works.
-- Observability should answer the question: What changes where applied to improve this resume?
+- Some resumes will be actually sent to their respective job applications which may result in no response, explicit rejection, or being contacted. I want this data to influence future runs so that the agents change their judging approach if I am not getting contacted.
+- Observability should be a priority
 
 
 ---

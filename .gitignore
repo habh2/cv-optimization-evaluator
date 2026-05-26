@@ -2,8 +2,7 @@
 .env
 
 # Input/output files (personal data)
-data/inputs/
-data/outputs/
+data/
 
 # Runtime data
 fitness-history.json

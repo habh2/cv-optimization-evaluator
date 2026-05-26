@@ -138,6 +138,7 @@ class EvaluateState(TypedDict):
     jd_analysis:  dict
     gap_analysis: str
     rag_context:  str
+    jd_embedding: list
     scores:       Annotated[Dict[str, dict], _merge_scores]
     best_baseline: str
 
@@ -185,14 +186,14 @@ def intake(state: EvaluateState) -> dict:
                 "baselines": {}, "jd_analysis": entry.get("jd_analysis", {}),
                 "gap_analysis": entry.get("gap_analysis", ""),
                 "rag_context": entry.get("rag_context", ""),
-                "scores": s, "best_baseline": best,
+                "jd_embedding": [], "scores": s, "best_baseline": best,
             }
 
     return {
         "jd": jd, "jd_hash": jd_hash, "master_cv": cv, "jd_id": jd_id,
         "from_cache": False, "force": force,
         "baselines": {}, "jd_analysis": {}, "gap_analysis": "",
-        "rag_context": "", "scores": {}, "best_baseline": "",
+        "rag_context": "", "jd_embedding": [], "scores": {}, "best_baseline": "",
     }
 
 
@@ -268,8 +269,9 @@ def rag_retrieve(state: EvaluateState) -> dict:
             print("  RAG: no past runs above similarity threshold — scoring without context.")
     except Exception as e:
         print(f"  RAG retrieve failed: {e} — scoring without context.")
+        jd_embedding = []
         context = ""
-    return {"rag_context": context}
+    return {"rag_context": context, "jd_embedding": jd_embedding}
 
 
 def load_baselines(state: EvaluateState) -> dict:
@@ -423,8 +425,10 @@ def report(state: EvaluateState) -> dict:
     # Persist run artifact to vector store
     if not state["from_cache"] and state["jd_id"]:
         best_scores = {d: scores[best_id][d]["score"] for d in _SCORE_DIMS}
+        jd_embedding = state.get("jd_embedding") or []
         try:
-            jd_embedding = rag_store.embed_text(state["jd"])
+            if not jd_embedding:
+                jd_embedding = rag_store.embed_text(state["jd"])
             role_category = state["jd_analysis"].get("role_category", "general")
             rag_store.upsert_run(
                 jd_id=state["jd_id"],
@@ -503,5 +507,5 @@ if __name__ == "__main__":
         "jd": "", "jd_hash": "", "master_cv": "", "jd_id": args.run,
         "force": args.force, "from_cache": False,
         "baselines": {}, "jd_analysis": {}, "gap_analysis": "",
-        "rag_context": "", "scores": {}, "best_baseline": "",
+        "rag_context": "", "jd_embedding": [], "scores": {}, "best_baseline": "",
     })

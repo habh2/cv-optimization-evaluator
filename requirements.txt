@@ -5,3 +5,4 @@ langchain-google-genai
 langsmith
 python-dotenv
 chromadb
+pytest

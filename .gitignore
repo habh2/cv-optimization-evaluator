@@ -1,0 +1,25 @@
+# Environment
+.env
+
+# Input/output files (personal data)
+data/inputs/
+data/outputs/
+
+# Runtime data
+fitness-history.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.old
+.claude/

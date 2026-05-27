@@ -4,7 +4,7 @@ import json
 import hashlib
 import argparse
 from datetime import date
-from typing import Annotated, Dict, Optional, TypedDict
+from typing import Annotated, Dict, TypedDict
 
 from dotenv import load_dotenv
 from langgraph.graph import StateGraph, END
@@ -28,18 +28,17 @@ except Exception:
 # ── Config ────────────────────────────────────────────────────────────────────
 SCORER_VERSION = os.environ["SCORER_VERSION"]
 
-_DIR          = os.path.dirname(os.path.abspath(__file__))
-CACHE_PATH    = os.path.join(_DIR, "data", "cache", "baselines.json")
-BASELINES_DIR = os.path.join(_DIR, "data", "inputs", "baselines")
+_DIR       = os.path.dirname(os.path.abspath(__file__))
+CACHE_PATH = os.path.join(_DIR, "data", "cache", "candidates.json")
 
-_FILENAME_RE = re.compile(r"^([a-zA-Z0-9_.\-]+)__([a-zA-Z0-9_\-]+)\.txt$")
-_SKILL_ID_RE  = re.compile(r"^[a-zA-Z0-9_\-]+$")
-_SCORE_DIMS  = ["keyword_coverage", "achievement_specificity", "jd_alignment", "readability", "voice"]
+_FILENAME_RE  = re.compile(r"^[a-zA-Z0-9_.\-]+\.txt$")
+_PROMPT_ID_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
+_SCORE_DIMS   = ["keyword_coverage", "achievement_specificity", "jd_alignment", "readability", "voice"]
 
 
 # ── LLM factory ───────────────────────────────────────────────────────────────
-def get_llm(model: Optional[str] = None):
-    return ChatGoogleGenerativeAI(model=model or os.environ["LLM_MODEL"], temperature=0.3)
+def get_llm():
+    return ChatGoogleGenerativeAI(model=os.environ["LLM_MODEL"], temperature=0.3)
 
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
@@ -132,19 +131,20 @@ def _merge_scores(existing: Dict[str, dict], new: Dict[str, dict]) -> Dict[str, 
 
 
 class EvaluateState(TypedDict):
-    jd:           str
-    jd_hash:      str
-    master_cv:    str
-    jd_id:        str
-    force:        bool
-    from_cache:   bool
-    baselines:    Dict[str, str]
-    jd_analysis:  dict
-    gap_analysis: str
-    rag_context:  str
-    jd_embedding: list
-    scores:       Annotated[Dict[str, dict], _merge_scores]
-    best_baseline: str
+    jd:            str
+    jd_hash:       str
+    master_cv:     str
+    jd_id:         str
+    force:         bool
+    master_only:   bool
+    from_cache:    bool
+    candidates:    Dict[str, str]
+    jd_analysis:   dict
+    gap_analysis:  str
+    rag_context:   str
+    jd_embedding:  list
+    scores:        Annotated[Dict[str, dict], _merge_scores]
+    best_candidate: str
 
 
 # ── Cache helpers ─────────────────────────────────────────────────────────────
@@ -161,24 +161,21 @@ def _save_cache(cache: dict) -> None:
         json.dump(cache, f, indent=2)
 
 
-def _cache_key(jd_id: str, jd_hash: str) -> str:
-    return f"{jd_id}_{jd_hash[:8]}_{SCORER_VERSION}"
-
-
 # ── Nodes ─────────────────────────────────────────────────────────────────────
 def intake(state: EvaluateState) -> dict:
-    jd       = loadfile("data/inputs/JobDescription.txt")
-    cv       = loadfile("data/inputs/CV.md")
-    jd_id    = state["jd_id"]
-    jd_hash  = hashlib.sha256(jd.encode()).hexdigest()
-    force    = state.get("force", False)
-    cache_key = _cache_key(jd_id if jd_id else "master", jd_hash)
+    jd_id   = state["jd_id"]
+    jd      = loadfile(f"data/inputs/{jd_id}/JobDescription.txt")
+    cv      = loadfile("data/inputs/CV.md")
+    jd_hash = hashlib.sha256(jd.encode()).hexdigest()
+    force   = state.get("force", False)
 
     if not force:
         cache = _load_cache()
-        if cache_key in cache:
-            entry = cache[cache_key]
-            s = entry["baselines"]
+        entry = cache.get(jd_id)
+        if (entry
+                and entry.get("jd_hash") == jd_hash[:8]
+                and entry.get("scorer_version") == SCORER_VERSION):
+            s = entry["candidates"]
             best = max(
                 (k for k in s if k != "master_cv"),
                 key=lambda k: s[k]["total"],
@@ -186,18 +183,18 @@ def intake(state: EvaluateState) -> dict:
             )
             return {
                 "jd": jd, "jd_hash": jd_hash, "master_cv": cv, "jd_id": jd_id,
-                "from_cache": True, "force": force,
-                "baselines": {}, "jd_analysis": entry.get("jd_analysis", {}),
+                "from_cache": True, "force": force, "master_only": state.get("master_only", False),
+                "candidates": {}, "jd_analysis": entry.get("jd_analysis", {}),
                 "gap_analysis": entry.get("gap_analysis", ""),
                 "rag_context": entry.get("rag_context", ""),
-                "jd_embedding": [], "scores": s, "best_baseline": best,
+                "jd_embedding": [], "scores": s, "best_candidate": best,
             }
 
     return {
         "jd": jd, "jd_hash": jd_hash, "master_cv": cv, "jd_id": jd_id,
-        "from_cache": False, "force": force,
-        "baselines": {}, "jd_analysis": {}, "gap_analysis": "",
-        "rag_context": "", "jd_embedding": [], "scores": {}, "best_baseline": "",
+        "from_cache": False, "force": force, "master_only": state.get("master_only", False),
+        "candidates": {}, "jd_analysis": {}, "gap_analysis": "",
+        "rag_context": "", "jd_embedding": [], "scores": {}, "best_candidate": "",
     }
 
 
@@ -227,7 +224,6 @@ def _parse_and_upsert_outcomes(content: str) -> None:
         jd_id, outcome, run_date = parts[0], parts[1], parts[2]
         if outcome not in ("contacted", "rejected", "no_response"):
             continue
-        # Look up existing artifact and update outcome only
         col = rag_store._collection()
         existing = col.get(ids=[jd_id])
         if existing["ids"]:
@@ -278,65 +274,64 @@ def rag_retrieve(state: EvaluateState) -> dict:
     return {"rag_context": context, "jd_embedding": jd_embedding}
 
 
-def load_baselines(state: EvaluateState) -> dict:
+def load_candidates(state: EvaluateState) -> dict:
     jd_id = state["jd_id"]
+    jd_dir = os.path.join(_DIR, "data", "inputs", jd_id)
 
-    if not jd_id:
-        print("  No --run specified; scoring master CV only.")
-        return {"baselines": {"master_cv": state["master_cv"]}}
-
-    baselines_dir = os.path.join(BASELINES_DIR, jd_id)
-
-    if not os.path.isdir(baselines_dir):
+    if not os.path.isdir(jd_dir):
         raise FileNotFoundError(
-            f"No baselines folder for jd_id '{jd_id}'. Expected: {baselines_dir}"
+            f"No folder for jd_id '{jd_id}'. Expected: {jd_dir}"
         )
 
-    baselines: Dict[str, str] = {"master_cv": state["master_cv"]}
+    candidates: Dict[str, str] = {"master_cv": state["master_cv"]}
 
-    for skill_id in sorted(os.listdir(baselines_dir)):
-        skill_dir = os.path.join(baselines_dir, skill_id)
-        if not os.path.isdir(skill_dir):
+    if state.get("master_only"):
+        print("  --master-only: skipping generation prompt folders.")
+        return {"candidates": candidates}
+
+    for prompt_id in sorted(os.listdir(jd_dir)):
+        prompt_dir = os.path.join(jd_dir, prompt_id)
+        if not os.path.isdir(prompt_dir):
             continue
-        if not _SKILL_ID_RE.match(skill_id):
+        if not _PROMPT_ID_RE.match(prompt_id):
             raise ValueError(
-                f"Invalid skill folder name '{skill_id}' in {baselines_dir}. "
+                f"Invalid generation prompt folder '{prompt_id}' in {jd_dir}. "
                 f"Expected: alphanumeric, hyphens, and underscores only."
             )
-        for filename in sorted(os.listdir(skill_dir)):
-            filepath = os.path.join(skill_dir, filename)
+        for filename in sorted(os.listdir(prompt_dir)):
+            filepath = os.path.join(prompt_dir, filename)
             if not os.path.isfile(filepath):
                 continue
             if not _FILENAME_RE.match(filename):
                 raise ValueError(
-                    f"Invalid baseline filename '{filename}' in {skill_dir}. "
-                    f"Expected: {{model}}__{{version}}.txt"
+                    f"Invalid candidate filename '{filename}' in {prompt_dir}. "
+                    f"Expected: {{model}}.txt"
                 )
-            baseline_id = f"{skill_id}/{filename[:-4]}"
+            candidate_id = f"{prompt_id}/{filename[:-4]}"
             with open(filepath, "r", encoding="utf-8") as f:
-                baselines[baseline_id] = f.read()
-            print(f"  Loaded: {baseline_id}")
+                candidates[candidate_id] = f.read()
+            print(f"  Loaded: {candidate_id}")
 
-    print(f"  Baselines loaded: {len(baselines)} (includes master_cv)")
-    return {"baselines": baselines}
+    print(f"  Candidates loaded: {len(candidates)} (includes master_cv)")
+    return {"candidates": candidates}
 
 
 def _dispatch_scoring(state: EvaluateState):
-    """Route from load_baselines: send one score_baseline task per baseline."""
+    """Route from load_candidates: send one score_candidate task per candidate."""
     return [
-        Send("score_baseline", {
-            "baseline_id":  bid,
+        Send("score_candidate", {
+            "candidate_id": bid,
             "cv_text":      cv_text,
             "jd_analysis":  state["jd_analysis"],
             "gap_analysis": state["gap_analysis"],
             "rag_context":  state["rag_context"],
         })
-        for bid, cv_text in state["baselines"].items()
+        for bid, cv_text in state["candidates"].items()
     ]
 
 
-def score_baseline(state: dict) -> dict:
-    baseline_id  = state["baseline_id"]
+def score_candidate(state: dict) -> dict:
+    candidate_id = state["candidate_id"]
     cv_text      = state["cv_text"]
     jd_analysis  = json.dumps(state["jd_analysis"], indent=2)
     gap_analysis = state.get("gap_analysis", "")
@@ -345,7 +340,7 @@ def score_baseline(state: dict) -> dict:
     gap_block = f"\nGAP ANALYSIS (master CV vs JD — use as context for what gaps this resume may address):\n{gap_analysis}\n" if gap_analysis else ""
     rag_block = f"\n{rag_context}\n" if rag_context else ""
 
-    print(f"  Scoring: {baseline_id}...")
+    print(f"  Scoring: {candidate_id}...")
     llm = get_llm()
     raw = extract_text(llm.invoke(SCORER_PROMPT.format(
         jd_analysis=jd_analysis,
@@ -365,11 +360,11 @@ def score_baseline(state: dict) -> dict:
                 "feedback": str(dim_data.get("feedback", "")),
             }
     except (json.JSONDecodeError, ValueError, TypeError):
-        print(f"    Warning: could not parse score for {baseline_id}, using zeros.")
+        print(f"    Warning: could not parse score for {candidate_id}, using zeros.")
         dims = {d: {"score": 0, "feedback": "parse error"} for d in _SCORE_DIMS}
 
     total = round(sum(dims[d]["score"] for d in _SCORE_DIMS) / len(_SCORE_DIMS) * 10, 1)
-    return {"scores": {baseline_id: {**dims, "total": total}}}
+    return {"scores": {candidate_id: {**dims, "total": total}}}
 
 
 def aggregate(state: EvaluateState) -> dict:
@@ -379,12 +374,12 @@ def aggregate(state: EvaluateState) -> dict:
         key=lambda k: scores[k]["total"],
         default="master_cv",
     )
-    return {"best_baseline": best}
+    return {"best_candidate": best}
 
 
 def report(state: EvaluateState) -> dict:
     scores  = state["scores"]
-    best_id = state["best_baseline"]
+    best_id = state["best_candidate"]
 
     if state["from_cache"]:
         print("[cached - use --force to re-evaluate]\n")
@@ -406,31 +401,31 @@ def report(state: EvaluateState) -> dict:
         "voice":                   "Voice",
     }
     col_w  = 45
-    header = f"{'Baseline':<{col_w}} | " + " | ".join(f"{v:>11}" for v in dim_labels.values()) + " | Total"
+    header = f"{'Candidate':<{col_w}} | " + " | ".join(f"{v:>11}" for v in dim_labels.values()) + " | Total"
     print(header)
     print("-" * len(header))
 
     order = ["master_cv"] + [k for k in scores if k != "master_cv"]
-    for baseline_id in order:
-        s      = scores[baseline_id]
+    for candidate_id in order:
+        s      = scores[candidate_id]
         dims_s = " | ".join(f"{s[d]['score']:>10}/10" for d in _SCORE_DIMS)
-        marker = " <--" if baseline_id == best_id else ""
-        print(f"{baseline_id:<{col_w}} | {dims_s} | {s['total']:>5.1f}{marker}")
+        marker = " <--" if candidate_id == best_id else ""
+        print(f"{candidate_id:<{col_w}} | {dims_s} | {s['total']:>5.1f}{marker}")
 
     print()
-    print(f"Best baseline: {best_id} ({scores[best_id]['total']:.1f}/100)")
+    print(f"Best candidate: {best_id} ({scores[best_id]['total']:.1f}/100)")
 
     print("\n--- Feedback Report ---\n")
-    for baseline_id in order:
-        s = scores[baseline_id]
-        print(f"[{baseline_id}]  total: {s['total']:.1f}/100")
+    for candidate_id in order:
+        s = scores[candidate_id]
+        print(f"[{candidate_id}]  total: {s['total']:.1f}/100")
         for d in _SCORE_DIMS:
             print(f"  {d} ({s[d]['score']}/10): {s[d]['feedback']}")
         print()
 
     # Persist run artifact to vector store
-    if not state["from_cache"] and state["jd_id"]:
-        best_scores = {d: scores[best_id][d]["score"] for d in _SCORE_DIMS}
+    if not state["from_cache"]:
+        best_scores  = {d: scores[best_id][d]["score"] for d in _SCORE_DIMS}
         jd_embedding = state.get("jd_embedding") or []
         try:
             if not jd_embedding:
@@ -448,14 +443,15 @@ def report(state: EvaluateState) -> dict:
             print(f"  Could not save run artifact: {e}")
 
     # Persist to cache
-    cache     = _load_cache()
-    cache_key = _cache_key(state["jd_id"] or "master", state["jd_hash"])
-    cache[cache_key] = {
-        "date":         str(date.today()),
-        "jd_analysis":  state.get("jd_analysis", {}),
-        "gap_analysis": state.get("gap_analysis", ""),
-        "rag_context":  state.get("rag_context", ""),
-        "baselines":    scores,
+    cache = _load_cache()
+    cache[state["jd_id"]] = {
+        "jd_hash":        state["jd_hash"][:8],
+        "scorer_version": SCORER_VERSION,
+        "date":           str(date.today()),
+        "jd_analysis":    state.get("jd_analysis", {}),
+        "gap_analysis":   state.get("gap_analysis", ""),
+        "rag_context":    state.get("rag_context", ""),
+        "candidates":     scores,
     }
     _save_cache(cache)
     print(f"Results cached to {CACHE_PATH}")
@@ -465,53 +461,55 @@ def report(state: EvaluateState) -> dict:
 
 # ── Graph ─────────────────────────────────────────────────────────────────────
 builder = StateGraph(EvaluateState)
-builder.add_node("intake",          intake)
-builder.add_node("outcome_sync",    outcome_sync)
-builder.add_node("jd_analyzer",     jd_analyzer)
-builder.add_node("gap_analyzer",    gap_analyzer)
-builder.add_node("rag_retrieve",    rag_retrieve)
-builder.add_node("load_baselines",  load_baselines)
-builder.add_node("score_baseline",  score_baseline)
-builder.add_node("aggregate",       aggregate)
-builder.add_node("report",          report)
+builder.add_node("intake",           intake)
+builder.add_node("outcome_sync",     outcome_sync)
+builder.add_node("jd_analyzer",      jd_analyzer)
+builder.add_node("gap_analyzer",     gap_analyzer)
+builder.add_node("rag_retrieve",     rag_retrieve)
+builder.add_node("load_candidates",  load_candidates)
+builder.add_node("score_candidate",  score_candidate)
+builder.add_node("aggregate",        aggregate)
+builder.add_node("report",           report)
 
 builder.set_entry_point("intake")
 builder.add_conditional_edges(
     "intake",
     lambda s: "report" if s["from_cache"] else "outcome_sync",
 )
-builder.add_edge("outcome_sync",   "jd_analyzer")
+builder.add_edge("outcome_sync",    "jd_analyzer")
 
 # Parallel fan-out after jd_analyzer
-builder.add_edge("jd_analyzer",    "gap_analyzer")
-builder.add_edge("jd_analyzer",    "rag_retrieve")
+builder.add_edge("jd_analyzer",     "gap_analyzer")
+builder.add_edge("jd_analyzer",     "rag_retrieve")
 
-# Both converge into load_baselines
-builder.add_edge("gap_analyzer",   "load_baselines")
-builder.add_edge("rag_retrieve",   "load_baselines")
+# Both converge into load_candidates
+builder.add_edge("gap_analyzer",    "load_candidates")
+builder.add_edge("rag_retrieve",    "load_candidates")
 
-# Fan-out: one score_baseline per baseline via Send()
-builder.add_conditional_edges("load_baselines", _dispatch_scoring, ["score_baseline"])
+# Fan-out: one score_candidate per candidate via Send()
+builder.add_conditional_edges("load_candidates", _dispatch_scoring, ["score_candidate"])
 
-builder.add_edge("score_baseline", "aggregate")
-builder.add_edge("aggregate",      "report")
-builder.add_edge("report",         END)
+builder.add_edge("score_candidate", "aggregate")
+builder.add_edge("aggregate",       "report")
+builder.add_edge("report",          END)
 
 graph = builder.compile()
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Evaluate CV baselines against a job description.")
-    parser.add_argument("--run",   default="", metavar="JD_ID",
-                        help="Job application folder under data/inputs/baselines/ (omit to score master CV only)")
+    parser = argparse.ArgumentParser(description="Evaluate CV candidates against a job description.")
+    parser.add_argument("--run", required=True, metavar="JD_ID",
+                        help="Job application folder under data/inputs/ (e.g. ml_eng_google)")
     parser.add_argument("--force", action="store_true",
                         help="Ignore cached results and re-evaluate")
+    parser.add_argument("--master-only", action="store_true",
+                        help="Score master CV only, skip generation prompt folders")
     args = parser.parse_args()
 
     graph.invoke({
         "jd": "", "jd_hash": "", "master_cv": "", "jd_id": args.run,
-        "force": args.force, "from_cache": False,
-        "baselines": {}, "jd_analysis": {}, "gap_analysis": "",
-        "rag_context": "", "jd_embedding": [], "scores": {}, "best_baseline": "",
+        "force": args.force, "master_only": args.master_only, "from_cache": False,
+        "candidates": {}, "jd_analysis": {}, "gap_analysis": "",
+        "rag_context": "", "jd_embedding": [], "scores": {}, "best_candidate": "",
     })

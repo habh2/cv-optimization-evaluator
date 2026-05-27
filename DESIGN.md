@@ -36,19 +36,19 @@ python graph.py --run {jd_id}
        └──────────┬──────────────┘   (LangGraph waits for both)
                   ▼
        ┌──────────────────┐
-       │  Load Baselines  │  Discover + validate files; always includes master_cv
+       │  Load Candidates │  Discover + validate files; always includes master_cv
        └──────┬───────────┘
               │
-              │  Send(score_baseline) × N     ← parallel fan-out, one per baseline
+              │  Send(score_candidate) × N    ← parallel fan-out, one per candidate
               ▼
        ┌──────────────────┐
-       │  score_baseline  │  LLM-as-judge → 5 dimension scores + feedback
+       │  score_candidate │  LLM-as-judge → 5 dimension scores + feedback
        │  (× N, parallel) │  Scorer prompt includes RAG context when available
        └──────┬───────────┘
               │
               ▼
        ┌──────────────┐
-       │  Aggregate   │  Collect scores; compute totals; identify best baseline
+       │  Aggregate   │  Collect scores; compute totals; identify best candidate
        └──────┬───────┘
               │
               ▼
@@ -73,9 +73,11 @@ Cached per `{jd_id}_{jd_hash[:8]}_{scorer_version}`:
 
 ```json
 {
-  "{jd_id}_{jd_hash[:8]}_{scorer_version}": {
+  "{jd_id}": {
+    "jd_hash": "<first 8 chars of SHA-256 of JD content>",
+    "scorer_version": "<SCORER_VERSION>",
     "date": "<ISO date>",
-    "baselines": {
+    "candidates": {
       "master_cv": {
         "keyword_coverage":        { "score": 7, "feedback": "..." },
         "achievement_specificity": { "score": 6, "feedback": "..." },
@@ -84,7 +86,7 @@ Cached per `{jd_id}_{jd_hash[:8]}_{scorer_version}`:
         "voice":                   { "score": 8, "feedback": "..." },
         "total": 76.0
       },
-      "{skill_id}/{model}__{version}": {
+      "{generation_prompt_id}/{model}": {
         "keyword_coverage":        { "score": 9, "feedback": "..." }
       }
     }
@@ -138,7 +140,7 @@ The `outcome_sync` node runs at the start of every pipeline run. It reads `caree
 | Pattern | Where |
 |---|---|
 | **Parallel nodes** | `gap_analyzer` + `rag_retrieve` run concurrently after `jd_analyzer` |
-| **Map-reduce fan-out** | `load_baselines` dispatches `Send(score_baseline)` per baseline; all run in parallel; `aggregate` collects |
+| **Map-reduce fan-out** | `load_candidates` dispatches `Send(score_candidate)` per candidate; all run in parallel; `aggregate` collects |
 | **Conditional skip** | `intake` short-circuits to `report` on cache hit |
 | **State reducer** | `scores` field uses dict-merge reducer (`{**existing, **new}`) to collect parallel scorer outputs |
 
@@ -150,7 +152,7 @@ The `outcome_sync` node runs at the start of every pipeline run. It reads `caree
 
 **What the traces show:**
 - Parallel execution of `gap_analyzer` / `rag_retrieve` (visible as concurrent spans)
-- Per-baseline scorer invocations (one span per baseline, all concurrent)
+- Per-candidate scorer invocations (one span per candidate, all concurrent)
 - RAG context string passed to each scorer (visible in span inputs)
 - Score output per dimension per baseline
 
@@ -160,11 +162,9 @@ The `outcome_sync` node runs at the start of every pipeline run. It reads `caree
 
 | Decision | Alternative considered | Rationale |
 |---|---|---|
-| User generates baselines manually | Pipeline calls LLMs to generate | Simpler pipeline; user controls prompt wording, model, and timing directly |
-| Skill × model encoded in file path | Single flat folder | Path structure is self-documenting and browsable; avoids filename collisions |
-| Double-underscore separator in filename | Single underscore or dash | Allows single underscores within model IDs (e.g. `gemini-2.5-flash`) without ambiguity |
-| Version in filename, not in a manifest | Separate metadata file | Filename is self-contained; no manifest to keep in sync |
-| Pipeline rejects invalid filenames | Silent skip | Fail-fast prevents silently missing a baseline due to a typo |
+| User generates candidates manually | Pipeline calls LLMs to generate | Simpler pipeline; user controls prompt wording, model, and timing directly |
+| `generation_prompt_id` × model encoded in file path | Single flat folder | Path structure is self-documenting and browsable; groups variants by the prompt that produced them |
+| Pipeline rejects invalid filenames | Silent skip | Fail-fast prevents silently missing a candidate due to a typo |
 | `avoid-ai-writing` pattern for voice dimension | Static blocklist | Pattern-based detection catches evolving AI-isms; model-agnostic |
 | RAG injects context into scorer prompt | RAG hard-codes scoring weights | Soft influence lets the LLM decide how to apply outcome data; avoids rigid feedback loops |
 | ChromaDB local persistent store | Hosted vector DB | No server required; suitable for single-user portfolio tool; trivially swappable |

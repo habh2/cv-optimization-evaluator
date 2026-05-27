@@ -13,17 +13,17 @@ Intake → Outcome Sync → JD Analyzer
                               ├── Gap Analyzer  ─┐
                               └── RAG Retrieve   ┘
                                         │
-                                 Load Baselines
+                                 Load Candidates
                                         │
-                         Send(score_baseline) × N   ← parallel
+                         Send(score_candidate) × N   ← parallel
                                         │
                                    Aggregate → Report
 ```
 
 1. **JD Analyzer** extracts must-haves, keywords, seniority, and role category from the job description.
 2. **Gap Analyzer** and **RAG Retrieve** run in parallel — gap analysis diffs the master CV against the JD; RAG retrieves outcome patterns from similar past runs.
-3. **Load Baselines** discovers manually-created CV variants under `data/inputs/baselines/{jd_id}/`.
-4. **Score Baseline** runs once per variant concurrently (LangGraph `Send()`), with the JD analysis, gap context, and RAG context all injected into the scorer prompt.
+3. **Load Candidates** discovers manually-created CV variants under `data/inputs/{jd_id}/`.
+4. **Score Candidate** runs once per variant concurrently (LangGraph `Send()`), with the JD analysis, gap context, and RAG context all injected into the scorer prompt.
 5. **Report** prints a comparison table + per-dimension feedback, then persists the run to the vector store and cache.
 
 Past application outcomes (`contacted` / `rejected` / `no_response`) are synced from `career-ops/applications.md` at run start and used to weight RAG retrieval, so the scoring judge adapts to what has actually correlated with getting contacted.
@@ -42,39 +42,40 @@ cp .env.example .env
 # Run 'phoenix serve' for local tracing (optional, see Observability section)
 ```
 
-Add your master CV and job description:
+Add your master CV:
 
 ```
 data/inputs/CV.md
-data/inputs/JobDescription.txt
 ```
 
 ---
 
-## Adding baselines
+## Adding candidates
 
-Generate CV variants with any tool (Claude Code skills, direct prompts, etc.) and drop them into the structured folder:
+Generate CV variants with any tool (Claude Code skills, direct prompts, etc.) and drop them into the job application folder:
 
 ```
-data/inputs/baselines/
+data/inputs/
   {jd_id}/
-    {skill_id}/
-      {model}__{version}.txt
+    JobDescription.txt
+    {generation_prompt_id}/
+      {model}.txt
 ```
 
 Example:
 
 ```
-data/inputs/baselines/
+data/inputs/
   ml_eng_google/
+    JobDescription.txt
     composio_tailored/
-      gemini-2.5-flash__v1.txt
-      claude-sonnet-4-6__v1.txt
+      gemini-2.5-flash.txt
+      claude-sonnet-4-6.txt
 ```
 
-- `{jd_id}` — your name for this application (e.g. `ml_eng_google`)
-- `{skill_id}` — any name using alphanumeric characters, hyphens, and underscores
-- `{model}__{version}.txt` — model ID + prompt version, double-underscore separated
+- `{jd_id}` — your name for this application (e.g. `ml_eng_google`); also used as the `--run` argument
+- `{generation_prompt_id}` — any name using alphanumeric characters, hyphens, and underscores; identifies the prompt used to generate the variants inside
+- `{model}.txt` — the model used to generate the variant
 
 Files not matching the pattern are rejected at load time.
 
@@ -83,17 +84,17 @@ Files not matching the pattern are rejected at load time.
 ## Running
 
 ```bash
-# Score all baselines for a job application
+# Score all candidates for a job application
 python graph.py --run ml_eng_google
 
 # Ignore cache and re-evaluate
 python graph.py --run ml_eng_google --force
 
-# Score master CV only (no baselines)
-python graph.py
+# Score master CV only (skip generation prompt folders)
+python graph.py --run ml_eng_google --master-only
 ```
 
-Output: comparison table + per-dimension feedback report. Results cached to `data/cache/baselines.json`.
+Output: comparison table + per-dimension feedback report. Results cached to `data/cache/candidates.json`.
 
 ---
 
@@ -124,7 +125,7 @@ phoenix serve
 Each run produces:
 
 - Parallel spans for `gap_analyzer` / `rag_retrieve`
-- N concurrent `score_baseline` spans (one per baseline)
+- N concurrent `score_candidate` spans (one per candidate)
 - Full scorer prompt visible per span, including injected gap and RAG context
 
 Phoenix is optional — if the server is not running, the pipeline continues without tracing.
@@ -137,7 +138,7 @@ Phoenix is optional — if the server is not running, the pipeline continues wit
 python -m pytest tests/ -v
 ```
 
-Covers: scorer JSON parse fallback, score clamping, fence stripping, cache key format, state reducer, RAG context summarization.
+Covers: scorer JSON parse fallback, score clamping, fence stripping, state reducer, RAG context summarization.
 
 ---
 
@@ -172,10 +173,10 @@ Each dimension returns a score and a short actionable feedback string. Examples:
 graph.py              — LangGraph pipeline (all nodes and wiring)
 rag_store.py          — ChromaDB vector store (upsert, retrieve, summarize)
 data/
-  inputs/             — CV.md, JobDescription.txt, baselines/
-  cache/              — baselines.json (cached scores)
+  inputs/             — CV.md + {jd_id}/ folders (JD + candidate CVs)
+  cache/              — candidates.json (cached scores)
   rag_store/          — ChromaDB persistence
 tests/
-  test_scorer.py      — score_baseline, _merge_scores, _cache_key
+  test_scorer.py      — score_candidate, _merge_scores
   test_rag_store.py   — summarize_context, threshold bounds
 ```

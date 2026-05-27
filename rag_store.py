@@ -26,7 +26,7 @@ def _collection() -> chromadb.Collection:
 
 
 def _embedder() -> GoogleGenerativeAIEmbeddings:
-    return GoogleGenerativeAIEmbeddings(model="gemini-embedding-2")
+    return GoogleGenerativeAIEmbeddings(model=os.environ["EMBEDDING_MODEL"])
 
 
 def embed_text(text: str) -> list[float]:

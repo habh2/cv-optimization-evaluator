@@ -10,7 +10,6 @@ from dotenv import load_dotenv
 from langgraph.graph import StateGraph, END
 from langgraph.types import Send
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_ollama import ChatOllama
 
 import rag_store
 
@@ -27,8 +26,7 @@ except Exception:
     pass
 
 # ── Config ────────────────────────────────────────────────────────────────────
-SCORER_VERSION = "v1.1"
-PROVIDER       = "gemini"
+SCORER_VERSION = os.environ["SCORER_VERSION"]
 
 _DIR          = os.path.dirname(os.path.abspath(__file__))
 CACHE_PATH    = os.path.join(_DIR, "data", "cache", "baselines.json")
@@ -40,12 +38,8 @@ _SCORE_DIMS  = ["keyword_coverage", "achievement_specificity", "jd_alignment", "
 
 
 # ── LLM factory ───────────────────────────────────────────────────────────────
-def get_llm(provider: str = PROVIDER, model: str = None):
-    if provider == "ollama":
-        return ChatOllama(model=model or "qwen3:4b")
-    elif provider == "gemini":
-        return ChatGoogleGenerativeAI(model=model or "gemini-2.5-flash", temperature=0.3)
-    raise ValueError(f"Unknown provider: {provider}")
+def get_llm(model: Optional[str] = None):
+    return ChatGoogleGenerativeAI(model=model or os.environ["LLM_MODEL"], temperature=0.3)
 
 
 # ── Utilities ─────────────────────────────────────────────────────────────────

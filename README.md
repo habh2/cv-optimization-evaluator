@@ -2,7 +2,7 @@
 
 A multi-agent CV evaluation pipeline. Scores manually-generated CV variants against a job description and produces structured, actionable feedback per dimension. Outcome data from real applications feeds back over time to calibrate the scoring judge.
 
-Built to demonstrate: **LangGraph multi-agent patterns**, **RAG**, **LLM-as-judge**, and **LangSmith observability**.
+Built to demonstrate: **LangGraph multi-agent patterns**, **RAG**, **LLM-as-judge**, and **LLM observability**.
 
 ---
 
@@ -39,7 +39,7 @@ python -m venv .venv
 
 cp .env.example .env
 # Fill in GOOGLE_API_KEY (required)
-# Fill in LANGCHAIN_API_KEY for LangSmith tracing (optional)
+# Run 'phoenix serve' for local tracing (optional, see Observability section)
 ```
 
 Add your master CV and job description:
@@ -73,7 +73,7 @@ data/inputs/baselines/
 ```
 
 - `{jd_id}` — your name for this application (e.g. `ml_eng_google`)
-- `{skill_id}` — must be a key in `skills_registry.py`
+- `{skill_id}` — any name using alphanumeric characters, hyphens, and underscores
 - `{model}__{version}.txt` — model ID + prompt version, double-underscore separated
 
 Files not matching the pattern are rejected at load time.
@@ -155,12 +155,22 @@ Each dimension: 0–10. Total = average × 10 → 0–100.
 
 ---
 
+## Feedback format
+
+Each dimension returns a score and a short actionable feedback string. Examples:
+
+- *Keyword coverage*: "Missing 'distributed systems' and 'MLOps' which appear 4× in the JD. Uses 'machine learning' where JD consistently says 'ML pipelines' — align terminology."
+- *Achievement specificity*: "3 of 7 bullets are vague ('contributed to', 'helped with'). Rewrite using: action verb + what + how/why + result."
+- *Readability*: "Two bullets exceed 25 words and use passive voice. Split and rewrite as: '[Subject] [verb] [outcome]'."
+- *Voice*: `"best practices"` — Tier 1 — replace with the specific practice (e.g. "zero-downtime deploy process"). `"streamlined"+"elevated"` in same section — Tier 2 cluster — replace with action + outcome (e.g. "cut deploy cycle from X to Y").
+
+---
+
 ## Project structure
 
 ```
 graph.py              — LangGraph pipeline (all nodes and wiring)
 rag_store.py          — ChromaDB vector store (upsert, retrieve, summarize)
-skills_registry.py    — Valid skill IDs for baseline discovery
 data/
   inputs/             — CV.md, JobDescription.txt, baselines/
   cache/              — baselines.json (cached scores)

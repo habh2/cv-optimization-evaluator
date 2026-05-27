@@ -2,7 +2,7 @@
 
 ## Goal
 
-Score and compare CV baselines against a target JD, and produce specific, actionable feedback per scoring dimension per baseline. Baselines are generated manually outside the tool — the pipeline only evaluates them. Outcome data from real applications feeds back into scoring context over time so the evaluator adapts to what actually gets candidates contacted.
+Score and compare CV candidates against a target JD, and produce specific, actionable feedback per scoring dimension per candidate. Candidates are generated manually outside the tool — the pipeline only evaluates them. Outcome data from real applications feeds back into scoring context over time so the evaluator adapts to what actually gets candidates contacted.
 
 ---
 
@@ -63,13 +63,11 @@ python graph.py --run {jd_id}
 
 ### Prompt (version-locked)
 
-One LLM-as-judge call per baseline returns all five dimension scores and feedback in a single structured JSON response. Prompt is version-locked (`SCORER_VERSION`); cached results store the version alongside scores so a prompt change invalidates the relevant cache entries.
+One LLM-as-judge call per candidate returns all five dimension scores and feedback in a single structured JSON response. Prompt is version-locked (`SCORER_VERSION`); cached results store the version alongside scores so a prompt change invalidates the relevant cache entries.
 
 When RAG context is available, the scorer prompt includes a `{rag_context}` block with outcome patterns from similar past runs (e.g., *"For similar ML Engineer roles: contacted candidates averaged keyword_coverage=8.2, voice=7.8; rejected candidates averaged 5.1, 5.3."*). The LLM uses this to calibrate its scoring judgment. When no past runs exist, the block is omitted and scoring behaviour is identical to a run without RAG.
 
 ### Cache schema
-
-Cached per `{jd_id}_{jd_hash[:8]}_{scorer_version}`:
 
 ```json
 {
@@ -107,7 +105,7 @@ Each completed evaluation run persists a **run artifact** to the vector store:
   jd_id:          "ml_eng_google",
   jd_embedding:   <vector>,            // embedding of the raw JD text
   role_category:  "ml-engineer" | "backend-swe" | ...,  // inferred by JD Analyzer
-  best_scores:    { keyword_coverage: 8, ... },  // scores of the best-performing baseline
+  best_scores:    { keyword_coverage: 8, ... },  // scores of the best-performing candidate
   outcome:        "contacted" | "rejected" | "no_response" | null,
   date:           <ISO date>
 }
@@ -148,13 +146,13 @@ The `outcome_sync` node runs at the start of every pipeline run. It reads `caree
 
 ## Observability
 
-**Tooling:** Phoenix (Arize) for local trace capture — open-source, no data leaves the machine. **Fallback:** structured JSON run log written locally on every run.
+**Tooling:** Phoenix (Arize) for local trace capture — open-source, no data leaves the machine.
 
 **What the traces show:**
 - Parallel execution of `gap_analyzer` / `rag_retrieve` (visible as concurrent spans)
 - Per-candidate scorer invocations (one span per candidate, all concurrent)
 - RAG context string passed to each scorer (visible in span inputs)
-- Score output per dimension per baseline
+- Score output per dimension per candidate
 
 ---
 
@@ -168,7 +166,7 @@ The `outcome_sync` node runs at the start of every pipeline run. It reads `caree
 | `avoid-ai-writing` pattern for voice dimension | Static blocklist | Pattern-based detection catches evolving AI-isms; model-agnostic |
 | RAG injects context into scorer prompt | RAG hard-codes scoring weights | Soft influence lets the LLM decide how to apply outcome data; avoids rigid feedback loops |
 | ChromaDB local persistent store | Hosted vector DB | No server required; suitable for single-user portfolio tool; trivially swappable |
-| Cache key includes JD hash | Cache key is jd_id only | JD file changes for the same application invalidate cache correctly |
+| Cache key is `jd_id`; JD hash + scorer version stored as fields | Hash encoded in key | Single readable key per application; invalidation checked at read time without key churn |
 | `force` flag threaded through state | Read from sys.argv in node | Nodes must be context-free; threading via state allows programmatic invocation and testing |
 
 ---
@@ -177,7 +175,7 @@ The `outcome_sync` node runs at the start of every pipeline run. It reads `caree
 
 ```
 cv-optimization-evaluator
-  └── outputs ResultCV.txt (best-scoring baseline)
+  └── outputs ResultCV.txt (best-scoring candidate)
         └── career-ops /career-ops pdf → ATS-clean PDF
 
 Shared state:

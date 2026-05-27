@@ -39,7 +39,6 @@ python -m venv .venv
 
 cp .env.example .env
 # Fill in GOOGLE_API_KEY (required)
-# Run 'phoenix serve' for local tracing (optional, see Observability section)
 ```
 
 Add your master CV:

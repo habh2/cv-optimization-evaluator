@@ -20,15 +20,3 @@ Demonstrates LangGraph multi-agent patterns, RAG, prod AI agent design, and LLM 
 - Some resumes will be actually sent to their respective job applications which may result in no response, explicit rejection, or being contacted. I want this data to influence future runs so that the agents change their judging approach if I am not getting contacted.
 - Observability should be a priority
 
-
----
-
-## Relationship to other projects
-
-| Project | Connection |
-|---------|-----------|
-
-| `career-ops` | Natural pipeline: cv-optimizer-agent → `ResultCV.txt` → career-ops `/career-ops pdf` → ATS-clean PDF. Outcome tracking in career-ops `applications.md` feeds directly into `--outcome`/`--result` flags. Both tools read the same `cv.md` source via symlink. |
-
----
-

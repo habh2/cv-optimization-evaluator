@@ -12,7 +12,6 @@ from langgraph.types import Send
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import ChatOllama
 
-from skills_registry import SKILLS
 import rag_store
 
 load_dotenv()
@@ -28,7 +27,7 @@ except Exception:
     pass
 
 # ── Config ────────────────────────────────────────────────────────────────────
-SCORER_VERSION = "v1.0"
+SCORER_VERSION = "v1.1"
 PROVIDER       = "gemini"
 
 _DIR          = os.path.dirname(os.path.abspath(__file__))
@@ -36,6 +35,7 @@ CACHE_PATH    = os.path.join(_DIR, "data", "cache", "baselines.json")
 BASELINES_DIR = os.path.join(_DIR, "data", "inputs", "baselines")
 
 _FILENAME_RE = re.compile(r"^([a-zA-Z0-9_.\-]+)__([a-zA-Z0-9_\-]+)\.txt$")
+_SKILL_ID_RE  = re.compile(r"^[a-zA-Z0-9_\-]+$")
 _SCORE_DIMS  = ["keyword_coverage", "achievement_specificity", "jd_alignment", "readability", "voice"]
 
 
@@ -116,6 +116,11 @@ Structural tells (each hit -1 pt): formulaic summary opener ("Results-driven [ro
 {rag_context_block}
 
 For each dimension provide a score and short actionable feedback (1-2 sentences, be specific about which phrases or bullets to fix).
+
+For the voice dimension specifically, each flagged issue must follow this structure:
+"[quoted phrase]" — [rule it breaks] — replace with [the specific thing it describes, e.g. the actual metric, scope, or action].
+Do not write "avoid X". Write what replaces X. If you cannot determine the replacement from the resume text, write "replace with the specific [metric / action / scope]".
+If there are no issues, state what makes the voice work.
 
 Return JSON only, no prose, no markdown fences:
 {{"keyword_coverage": {{"score": <int>, "feedback": "<text>"}}, "achievement_specificity": {{"score": <int>, "feedback": "<text>"}}, "jd_alignment": {{"score": <int>, "feedback": "<text>"}}, "readability": {{"score": <int>, "feedback": "<text>"}}, "voice": {{"score": <int>, "feedback": "<text>"}}}}
@@ -299,9 +304,11 @@ def load_baselines(state: EvaluateState) -> dict:
         skill_dir = os.path.join(baselines_dir, skill_id)
         if not os.path.isdir(skill_dir):
             continue
-        if skill_id not in SKILLS:
-            print(f"  Warning: unknown skill_id '{skill_id}', skipping.")
-            continue
+        if not _SKILL_ID_RE.match(skill_id):
+            raise ValueError(
+                f"Invalid skill folder name '{skill_id}' in {baselines_dir}. "
+                f"Expected: alphanumeric, hyphens, and underscores only."
+            )
         for filename in sorted(os.listdir(skill_dir)):
             filepath = os.path.join(skill_dir, filename)
             if not os.path.isfile(filepath):

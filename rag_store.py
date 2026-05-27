@@ -6,12 +6,12 @@ from typing import Optional
 import chromadb
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
-_DIR        = os.path.dirname(os.path.abspath(__file__))
+_DIR = os.path.dirname(os.path.abspath(__file__))
 _STORE_PATH = os.path.join(_DIR, "data", "rag_store")
 _COLLECTION = "cv_runs"
 
 SIMILARITY_THRESHOLD = 0.55
-TOP_K                = 5
+TOP_K = 5
 
 _OUTCOME_WEIGHT = {"contacted": 3, "no_response": 2, "rejected": 1, None: 1}
 
@@ -22,7 +22,9 @@ def _client() -> chromadb.PersistentClient:
 
 
 def _collection() -> chromadb.Collection:
-    return _client().get_or_create_collection(_COLLECTION, metadata={"hnsw:space": "cosine"})
+    return _client().get_or_create_collection(
+        _COLLECTION, metadata={"hnsw:space": "cosine"}
+    )
 
 
 def _embedder() -> GoogleGenerativeAIEmbeddings:
@@ -44,11 +46,11 @@ def upsert_run(
     col = _collection()
     doc_id = jd_id
     metadata = {
-        "jd_id":         jd_id,
+        "jd_id": jd_id,
         "role_category": role_category,
-        "outcome":       outcome or "null",
-        "date":          run_date or str(date.today()),
-        "best_scores":   json.dumps(best_scores),
+        "outcome": outcome or "null",
+        "date": run_date or str(date.today()),
+        "best_scores": json.dumps(best_scores),
     }
     col.upsert(
         ids=[doc_id],
@@ -80,15 +82,17 @@ def retrieve_similar(
         if similarity < SIMILARITY_THRESHOLD:
             continue
         outcome_val = meta["outcome"] if meta["outcome"] != "null" else None
-        runs.append({
-            "jd_id":         meta["jd_id"],
-            "role_category": meta["role_category"],
-            "outcome":       outcome_val,
-            "date":          meta["date"],
-            "best_scores":   json.loads(meta["best_scores"]),
-            "similarity":    round(similarity, 3),
-            "weight":        _OUTCOME_WEIGHT.get(outcome_val, 1),
-        })
+        runs.append(
+            {
+                "jd_id": meta["jd_id"],
+                "role_category": meta["role_category"],
+                "outcome": outcome_val,
+                "date": meta["date"],
+                "best_scores": json.loads(meta["best_scores"]),
+                "similarity": round(similarity, 3),
+                "weight": _OUTCOME_WEIGHT.get(outcome_val, 1),
+            }
+        )
 
     runs.sort(key=lambda r: (r["weight"], r["similarity"]), reverse=True)
     return runs
@@ -99,9 +103,15 @@ def summarize_context(runs: list[dict]) -> str:
         return ""
 
     contacted = [r for r in runs if r["outcome"] == "contacted"]
-    rejected  = [r for r in runs if r["outcome"] == "rejected"]
+    rejected = [r for r in runs if r["outcome"] == "rejected"]
 
-    dims = ["keyword_coverage", "achievement_specificity", "jd_alignment", "readability", "voice"]
+    dims = [
+        "keyword_coverage",
+        "achievement_specificity",
+        "jd_alignment",
+        "readability",
+        "voice",
+    ]
 
     def avg_scores(group: list[dict]) -> dict:
         if not group:
@@ -127,9 +137,13 @@ def summarize_context(runs: list[dict]) -> str:
         score_str = ", ".join(f"{d}={v}" for d, v in avgs.items())
         lines.append(f"  Rejected ({len(rejected)} run(s)):  {score_str}")
 
-    no_outcome = [r for r in runs if r["outcome"] is None or r["outcome"] == "no_response"]
+    no_outcome = [
+        r for r in runs if r["outcome"] is None or r["outcome"] == "no_response"
+    ]
     if no_outcome and not contacted and not rejected:
-        lines.append(f"  No outcome data yet ({len(no_outcome)} run(s)) — use as general context only.")
+        lines.append(
+            f"  No outcome data yet ({len(no_outcome)} run(s)) — use as general context only."
+        )
 
     lines.append(
         "Use these patterns to calibrate your scoring: dimensions where contacted candidates "

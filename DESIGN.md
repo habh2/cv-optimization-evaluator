@@ -1,4 +1,4 @@
-# CV Optimizer Agent — Design
+# CV Optimization Evaluator — Design
 
 ## Goal
 
@@ -176,7 +176,7 @@ The `outcome_sync` node runs at the start of every pipeline run. It reads `caree
 ## Integration: career-ops
 
 ```
-cv-optimizer-agent
+cv-optimization-evaluator
   └── outputs ResultCV.txt (best-scoring baseline)
         └── career-ops /career-ops pdf → ATS-clean PDF
 
@@ -185,4 +185,4 @@ Shared state:
   - career-ops applications.md → outcome_sync at run start → vector store
 ```
 
-Tools are decoupled — cv-optimizer-agent does not depend on career-ops at runtime.
+Tools are decoupled — cv-optimization-evaluator does not depend on career-ops at runtime.

@@ -1,4 +1,4 @@
-# CV Optimizer Agent
+# CV Optimization Evaluator
 
 A multi-agent CV evaluation pipeline. Scores manually-generated CV variants against a job description and produces structured, actionable feedback per dimension. Outcome data from real applications feeds back over time to calibrate the scoring judge.
 

@@ -20,7 +20,8 @@ load_dotenv()
 try:
     from phoenix.otel import register
     from openinference.instrumentation.langchain import LangChainInstrumentor
-    register(project_name="cv-optimizer-agent")
+
+    register(project_name="cv-optimization-evaluator")
     LangChainInstrumentor().instrument()
 except Exception:
     pass
@@ -28,12 +29,18 @@ except Exception:
 # ── Config ────────────────────────────────────────────────────────────────────
 SCORER_VERSION = os.environ["SCORER_VERSION"]
 
-_DIR       = os.path.dirname(os.path.abspath(__file__))
+_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_PATH = os.path.join(_DIR, "data", "cache", "candidates.json")
 
-_FILENAME_RE  = re.compile(r"^[a-zA-Z0-9_.\-]+\.txt$")
+_FILENAME_RE = re.compile(r"^[a-zA-Z0-9_.\-]+\.txt$")
 _PROMPT_ID_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
-_SCORE_DIMS   = ["keyword_coverage", "achievement_specificity", "jd_alignment", "readability", "voice"]
+_SCORE_DIMS = [
+    "keyword_coverage",
+    "achievement_specificity",
+    "jd_alignment",
+    "readability",
+    "voice",
+]
 
 
 # ── LLM factory ───────────────────────────────────────────────────────────────
@@ -131,19 +138,19 @@ def _merge_scores(existing: Dict[str, dict], new: Dict[str, dict]) -> Dict[str, 
 
 
 class EvaluateState(TypedDict):
-    jd:            str
-    jd_hash:       str
-    master_cv:     str
-    jd_id:         str
-    force:         bool
-    master_only:   bool
-    from_cache:    bool
-    candidates:    Dict[str, str]
-    jd_analysis:   dict
-    gap_analysis:  str
-    rag_context:   str
-    jd_embedding:  list
-    scores:        Annotated[Dict[str, dict], _merge_scores]
+    jd: str
+    jd_hash: str
+    master_cv: str
+    jd_id: str
+    force: bool
+    master_only: bool
+    from_cache: bool
+    candidates: Dict[str, str]
+    jd_analysis: dict
+    gap_analysis: str
+    rag_context: str
+    jd_embedding: list
+    scores: Annotated[Dict[str, dict], _merge_scores]
     best_candidate: str
 
 
@@ -163,18 +170,20 @@ def _save_cache(cache: dict) -> None:
 
 # ── Nodes ─────────────────────────────────────────────────────────────────────
 def intake(state: EvaluateState) -> dict:
-    jd_id   = state["jd_id"]
-    jd      = loadfile(f"data/inputs/{jd_id}/JobDescription.txt")
-    cv      = loadfile("data/inputs/CV.md")
+    jd_id = state["jd_id"]
+    jd = loadfile(f"data/inputs/{jd_id}/JobDescription.txt")
+    cv = loadfile("data/inputs/CV.md")
     jd_hash = hashlib.sha256(jd.encode()).hexdigest()
-    force   = state.get("force", False)
+    force = state.get("force", False)
 
     if not force:
         cache = _load_cache()
         entry = cache.get(jd_id)
-        if (entry
-                and entry.get("jd_hash") == jd_hash[:8]
-                and entry.get("scorer_version") == SCORER_VERSION):
+        if (
+            entry
+            and entry.get("jd_hash") == jd_hash[:8]
+            and entry.get("scorer_version") == SCORER_VERSION
+        ):
             s = entry["candidates"]
             best = max(
                 (k for k in s if k != "master_cv"),
@@ -182,19 +191,37 @@ def intake(state: EvaluateState) -> dict:
                 default="master_cv",
             )
             return {
-                "jd": jd, "jd_hash": jd_hash, "master_cv": cv, "jd_id": jd_id,
-                "from_cache": True, "force": force, "master_only": state.get("master_only", False),
-                "candidates": {}, "jd_analysis": entry.get("jd_analysis", {}),
+                "jd": jd,
+                "jd_hash": jd_hash,
+                "master_cv": cv,
+                "jd_id": jd_id,
+                "from_cache": True,
+                "force": force,
+                "master_only": state.get("master_only", False),
+                "candidates": {},
+                "jd_analysis": entry.get("jd_analysis", {}),
                 "gap_analysis": entry.get("gap_analysis", ""),
                 "rag_context": entry.get("rag_context", ""),
-                "jd_embedding": [], "scores": s, "best_candidate": best,
+                "jd_embedding": [],
+                "scores": s,
+                "best_candidate": best,
             }
 
     return {
-        "jd": jd, "jd_hash": jd_hash, "master_cv": cv, "jd_id": jd_id,
-        "from_cache": False, "force": force, "master_only": state.get("master_only", False),
-        "candidates": {}, "jd_analysis": {}, "gap_analysis": "",
-        "rag_context": "", "jd_embedding": [], "scores": {}, "best_candidate": "",
+        "jd": jd,
+        "jd_hash": jd_hash,
+        "master_cv": cv,
+        "jd_id": jd_id,
+        "from_cache": False,
+        "force": force,
+        "master_only": state.get("master_only", False),
+        "candidates": {},
+        "jd_analysis": {},
+        "gap_analysis": "",
+        "rag_context": "",
+        "jd_embedding": [],
+        "scores": {},
+        "best_candidate": "",
     }
 
 
@@ -221,7 +248,7 @@ def _parse_and_upsert_outcomes(content: str) -> None:
         parts = [p.strip() for p in line.strip("|").split("|")]
         if len(parts) < 3 or parts[0] in ("jd_id", "---", ""):
             continue
-        jd_id, outcome, run_date = parts[0], parts[1], parts[2]
+        jd_id, outcome, _run_date = parts[0], parts[1], parts[2]
         if outcome not in ("contacted", "rejected", "no_response"):
             continue
         col = rag_store._collection()
@@ -264,9 +291,13 @@ def rag_retrieve(state: EvaluateState) -> dict:
         runs = rag_store.retrieve_similar(jd_embedding, role_category)
         context = rag_store.summarize_context(runs)
         if context:
-            print(f"  RAG: {len(runs)} similar run(s) found for role '{role_category}'.")
+            print(
+                f"  RAG: {len(runs)} similar run(s) found for role '{role_category}'."
+            )
         else:
-            print("  RAG: no past runs above similarity threshold — scoring without context.")
+            print(
+                "  RAG: no past runs above similarity threshold — scoring without context."
+            )
     except Exception as e:
         print(f"  RAG retrieve failed: {e} — scoring without context.")
         jd_embedding = []
@@ -279,9 +310,7 @@ def load_candidates(state: EvaluateState) -> dict:
     jd_dir = os.path.join(_DIR, "data", "inputs", jd_id)
 
     if not os.path.isdir(jd_dir):
-        raise FileNotFoundError(
-            f"No folder for jd_id '{jd_id}'. Expected: {jd_dir}"
-        )
+        raise FileNotFoundError(f"No folder for jd_id '{jd_id}'. Expected: {jd_dir}")
 
     candidates: Dict[str, str] = {"master_cv": state["master_cv"]}
 
@@ -319,35 +348,46 @@ def load_candidates(state: EvaluateState) -> dict:
 def _dispatch_scoring(state: EvaluateState):
     """Route from load_candidates: send one score_candidate task per candidate."""
     return [
-        Send("score_candidate", {
-            "candidate_id": bid,
-            "cv_text":      cv_text,
-            "jd_analysis":  state["jd_analysis"],
-            "gap_analysis": state["gap_analysis"],
-            "rag_context":  state["rag_context"],
-        })
+        Send(
+            "score_candidate",
+            {
+                "candidate_id": bid,
+                "cv_text": cv_text,
+                "jd_analysis": state["jd_analysis"],
+                "gap_analysis": state["gap_analysis"],
+                "rag_context": state["rag_context"],
+            },
+        )
         for bid, cv_text in state["candidates"].items()
     ]
 
 
 def score_candidate(state: dict) -> dict:
     candidate_id = state["candidate_id"]
-    cv_text      = state["cv_text"]
-    jd_analysis  = json.dumps(state["jd_analysis"], indent=2)
+    cv_text = state["cv_text"]
+    jd_analysis = json.dumps(state["jd_analysis"], indent=2)
     gap_analysis = state.get("gap_analysis", "")
-    rag_context  = state.get("rag_context", "")
+    rag_context = state.get("rag_context", "")
 
-    gap_block = f"\nGAP ANALYSIS (master CV vs JD — use as context for what gaps this resume may address):\n{gap_analysis}\n" if gap_analysis else ""
+    gap_block = (
+        f"\nGAP ANALYSIS (master CV vs JD — use as context for what gaps this resume may address):\n{gap_analysis}\n"
+        if gap_analysis
+        else ""
+    )
     rag_block = f"\n{rag_context}\n" if rag_context else ""
 
     print(f"  Scoring: {candidate_id}...")
     llm = get_llm()
-    raw = extract_text(llm.invoke(SCORER_PROMPT.format(
-        jd_analysis=jd_analysis,
-        cv=cv_text,
-        gap_analysis_block=gap_block,
-        rag_context_block=rag_block,
-    ))).strip()
+    raw = extract_text(
+        llm.invoke(
+            SCORER_PROMPT.format(
+                jd_analysis=jd_analysis,
+                cv=cv_text,
+                gap_analysis_block=gap_block,
+                rag_context_block=rag_block,
+            )
+        )
+    ).strip()
     raw = strip_fences(raw)
 
     try:
@@ -356,7 +396,7 @@ def score_candidate(state: dict) -> dict:
         for d in _SCORE_DIMS:
             dim_data = parsed.get(d, {})
             dims[d] = {
-                "score":    max(0, min(10, int(dim_data.get("score", 0)))),
+                "score": max(0, min(10, int(dim_data.get("score", 0)))),
                 "feedback": str(dim_data.get("feedback", "")),
             }
     except (json.JSONDecodeError, ValueError, TypeError):
@@ -378,7 +418,7 @@ def aggregate(state: EvaluateState) -> dict:
 
 
 def report(state: EvaluateState) -> dict:
-    scores  = state["scores"]
+    scores = state["scores"]
     best_id = state["best_candidate"]
 
     if state["from_cache"]:
@@ -394,20 +434,24 @@ def report(state: EvaluateState) -> dict:
         print()
 
     dim_labels = {
-        "keyword_coverage":        "Keywords",
+        "keyword_coverage": "Keywords",
         "achievement_specificity": "Achieve.",
-        "jd_alignment":            "Alignment",
-        "readability":             "Readability",
-        "voice":                   "Voice",
+        "jd_alignment": "Alignment",
+        "readability": "Readability",
+        "voice": "Voice",
     }
-    col_w  = 45
-    header = f"{'Candidate':<{col_w}} | " + " | ".join(f"{v:>11}" for v in dim_labels.values()) + " | Total"
+    col_w = 45
+    header = (
+        f"{'Candidate':<{col_w}} | "
+        + " | ".join(f"{v:>11}" for v in dim_labels.values())
+        + " | Total"
+    )
     print(header)
     print("-" * len(header))
 
     order = ["master_cv"] + [k for k in scores if k != "master_cv"]
     for candidate_id in order:
-        s      = scores[candidate_id]
+        s = scores[candidate_id]
         dims_s = " | ".join(f"{s[d]['score']:>10}/10" for d in _SCORE_DIMS)
         marker = " <--" if candidate_id == best_id else ""
         print(f"{candidate_id:<{col_w}} | {dims_s} | {s['total']:>5.1f}{marker}")
@@ -425,7 +469,7 @@ def report(state: EvaluateState) -> dict:
 
     # Persist run artifact to vector store
     if not state["from_cache"]:
-        best_scores  = {d: scores[best_id][d]["score"] for d in _SCORE_DIMS}
+        best_scores = {d: scores[best_id][d]["score"] for d in _SCORE_DIMS}
         jd_embedding = state.get("jd_embedding") or []
         try:
             if not jd_embedding:
@@ -445,13 +489,13 @@ def report(state: EvaluateState) -> dict:
     # Persist to cache
     cache = _load_cache()
     cache[state["jd_id"]] = {
-        "jd_hash":        state["jd_hash"][:8],
+        "jd_hash": state["jd_hash"][:8],
         "scorer_version": SCORER_VERSION,
-        "date":           str(date.today()),
-        "jd_analysis":    state.get("jd_analysis", {}),
-        "gap_analysis":   state.get("gap_analysis", ""),
-        "rag_context":    state.get("rag_context", ""),
-        "candidates":     scores,
+        "date": str(date.today()),
+        "jd_analysis": state.get("jd_analysis", {}),
+        "gap_analysis": state.get("gap_analysis", ""),
+        "rag_context": state.get("rag_context", ""),
+        "candidates": scores,
     }
     _save_cache(cache)
     print(f"Results cached to {CACHE_PATH}")
@@ -461,55 +505,77 @@ def report(state: EvaluateState) -> dict:
 
 # ── Graph ─────────────────────────────────────────────────────────────────────
 builder = StateGraph(EvaluateState)
-builder.add_node("intake",           intake)
-builder.add_node("outcome_sync",     outcome_sync)
-builder.add_node("jd_analyzer",      jd_analyzer)
-builder.add_node("gap_analyzer",     gap_analyzer)
-builder.add_node("rag_retrieve",     rag_retrieve)
-builder.add_node("load_candidates",  load_candidates)
-builder.add_node("score_candidate",  score_candidate)
-builder.add_node("aggregate",        aggregate)
-builder.add_node("report",           report)
+builder.add_node("intake", intake)
+builder.add_node("outcome_sync", outcome_sync)
+builder.add_node("jd_analyzer", jd_analyzer)
+builder.add_node("gap_analyzer", gap_analyzer)
+builder.add_node("rag_retrieve", rag_retrieve)
+builder.add_node("load_candidates", load_candidates)
+builder.add_node("score_candidate", score_candidate)
+builder.add_node("aggregate", aggregate)
+builder.add_node("report", report)
 
 builder.set_entry_point("intake")
 builder.add_conditional_edges(
     "intake",
     lambda s: "report" if s["from_cache"] else "outcome_sync",
 )
-builder.add_edge("outcome_sync",    "jd_analyzer")
+builder.add_edge("outcome_sync", "jd_analyzer")
 
 # Parallel fan-out after jd_analyzer
-builder.add_edge("jd_analyzer",     "gap_analyzer")
-builder.add_edge("jd_analyzer",     "rag_retrieve")
+builder.add_edge("jd_analyzer", "gap_analyzer")
+builder.add_edge("jd_analyzer", "rag_retrieve")
 
 # Both converge into load_candidates
-builder.add_edge("gap_analyzer",    "load_candidates")
-builder.add_edge("rag_retrieve",    "load_candidates")
+builder.add_edge("gap_analyzer", "load_candidates")
+builder.add_edge("rag_retrieve", "load_candidates")
 
 # Fan-out: one score_candidate per candidate via Send()
 builder.add_conditional_edges("load_candidates", _dispatch_scoring, ["score_candidate"])
 
 builder.add_edge("score_candidate", "aggregate")
-builder.add_edge("aggregate",       "report")
-builder.add_edge("report",          END)
+builder.add_edge("aggregate", "report")
+builder.add_edge("report", END)
 
 graph = builder.compile()
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Evaluate CV candidates against a job description.")
-    parser.add_argument("--run", required=True, metavar="JD_ID",
-                        help="Job application folder under data/inputs/ (e.g. ml_eng_google)")
-    parser.add_argument("--force", action="store_true",
-                        help="Ignore cached results and re-evaluate")
-    parser.add_argument("--master-only", action="store_true",
-                        help="Score master CV only, skip generation prompt folders")
+    parser = argparse.ArgumentParser(
+        description="Evaluate CV candidates against a job description."
+    )
+    parser.add_argument(
+        "--run",
+        required=True,
+        metavar="JD_ID",
+        help="Job application folder under data/inputs/ (e.g. ml_eng_google)",
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="Ignore cached results and re-evaluate"
+    )
+    parser.add_argument(
+        "--master-only",
+        action="store_true",
+        help="Score master CV only, skip generation prompt folders",
+    )
     args = parser.parse_args()
 
-    graph.invoke({
-        "jd": "", "jd_hash": "", "master_cv": "", "jd_id": args.run,
-        "force": args.force, "master_only": args.master_only, "from_cache": False,
-        "candidates": {}, "jd_analysis": {}, "gap_analysis": "",
-        "rag_context": "", "jd_embedding": [], "scores": {}, "best_candidate": "",
-    })
+    graph.invoke(
+        {
+            "jd": "",
+            "jd_hash": "",
+            "master_cv": "",
+            "jd_id": args.run,
+            "force": args.force,
+            "master_only": args.master_only,
+            "from_cache": False,
+            "candidates": {},
+            "jd_analysis": {},
+            "gap_analysis": "",
+            "rag_context": "",
+            "jd_embedding": [],
+            "scores": {},
+            "best_candidate": "",
+        }
+    )

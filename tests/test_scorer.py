@@ -1,8 +1,7 @@
 """Tests for score_candidate node and supporting logic in graph.py."""
+
 import json
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from graph import (
     _SCORE_DIMS,
@@ -13,9 +12,13 @@ from graph import (
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 def _valid_llm_response(scores: dict) -> MagicMock:
     """Return a mock LLM that produces a well-formed JSON scorer response."""
-    payload = {d: {"score": scores.get(d, 5), "feedback": f"feedback for {d}"} for d in _SCORE_DIMS}
+    payload = {
+        d: {"score": scores.get(d, 5), "feedback": f"feedback for {d}"}
+        for d in _SCORE_DIMS
+    }
     mock = MagicMock()
     mock.content = json.dumps(payload)
     return mock
@@ -24,10 +27,10 @@ def _valid_llm_response(scores: dict) -> MagicMock:
 def _scorer_state(overrides: dict = None) -> dict:
     base = {
         "candidate_id": "test/gemini-2.5-flash",
-        "cv_text":      "Software engineer with Python experience.",
-        "jd_analysis":  {"must_haves": ["Python"], "keywords": ["Python"]},
+        "cv_text": "Software engineer with Python experience.",
+        "jd_analysis": {"must_haves": ["Python"], "keywords": ["Python"]},
         "gap_analysis": "Missing distributed systems experience.",
-        "rag_context":  "",
+        "rag_context": "",
     }
     if overrides:
         base.update(overrides)
@@ -36,12 +39,14 @@ def _scorer_state(overrides: dict = None) -> dict:
 
 # ── score_candidate ────────────────────────────────────────────────────────────
 
-class TestScoreCandidate:
 
+class TestScoreCandidate:
     def test_happy_path_returns_all_dims(self):
         expected = {d: 6 for d in _SCORE_DIMS}
         with patch("graph.get_llm") as mock_get_llm:
-            mock_get_llm.return_value.invoke.return_value = _valid_llm_response(expected)
+            mock_get_llm.return_value.invoke.return_value = _valid_llm_response(
+                expected
+            )
             result = score_candidate(_scorer_state())
 
         scores = result["scores"]["test/gemini-2.5-flash"]
@@ -95,7 +100,9 @@ class TestScoreCandidate:
     def test_result_keyed_by_candidate_id(self):
         with patch("graph.get_llm") as mock_get_llm:
             mock_get_llm.return_value.invoke.return_value = _valid_llm_response({})
-            result = score_candidate(_scorer_state({"candidate_id": "composio/claude-sonnet-4-6"}))
+            result = score_candidate(
+                _scorer_state({"candidate_id": "composio/claude-sonnet-4-6"})
+            )
 
         assert "composio/claude-sonnet-4-6" in result["scores"]
 
@@ -126,8 +133,8 @@ class TestScoreCandidate:
 
 # ── _merge_scores ──────────────────────────────────────────────────────────────
 
-class TestMergeScores:
 
+class TestMergeScores:
     def test_merges_disjoint_keys(self):
         a = {"master_cv": {"total": 50.0}}
         b = {"composio/gemini": {"total": 65.0}}

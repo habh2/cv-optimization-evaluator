@@ -26,7 +26,7 @@ Intake → Outcome Sync → JD Analyzer
 4. **Score Candidate** runs once per variant concurrently (LangGraph `Send()`), with the JD analysis, gap context, and RAG context all injected into the scorer prompt.
 5. **Report** prints a comparison table + per-dimension feedback, then persists the run to the vector store and cache.
 
-Past application outcomes (`contacted` / `rejected` / `no_response`) are synced from `career-ops/applications.md` at run start and used to weight RAG retrieval, so the scoring judge adapts to what has actually correlated with getting contacted.
+Past application outcomes (`contacted` / `rejected` / `no_response`) are synced from `data/applications.md` at run start and used to weight RAG retrieval, so the scoring judge adapts to what has actually correlated with getting contacted.
 
 ---
 
@@ -99,7 +99,7 @@ Output: comparison table + per-dimension feedback report. Results cached to `dat
 
 ## Recording outcomes
 
-When a real application produces a result, add a row to `career-ops/applications.md`:
+When a real application produces a result, add a row to `data/applications.md` in this repo. Create the file if it does not exist.
 
 ```markdown
 | jd_id          | outcome     | date       |
@@ -109,6 +109,8 @@ When a real application produces a result, add a row to `career-ops/applications
 ```
 
 Valid outcomes: `contacted`, `rejected`, `no_response`. On the next run, `outcome_sync` picks up new rows and updates the vector store. Subsequent runs for similar roles will include this calibration data in the scorer prompt.
+
+> **Note:** [career-ops](https://github.com/santifer/career-ops) is an external AI job-search tool that tracks applications in its own format. Integrating directly with its tracker — rather than maintaining this separate file — is a natural next step to explore.
 
 ---
 

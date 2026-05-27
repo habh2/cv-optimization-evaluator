@@ -226,7 +226,7 @@ def intake(state: EvaluateState) -> dict:
 
 
 def outcome_sync(state: EvaluateState) -> dict:
-    career_ops_path = os.path.join(_DIR, "..", "career-ops", "applications.md")
+    career_ops_path = os.path.join(_DIR, "data", "applications.md")
     if not os.path.exists(career_ops_path):
         return {}
 

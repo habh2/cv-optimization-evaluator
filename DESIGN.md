@@ -224,7 +224,7 @@ The `outcome_sync` node runs at the start of every pipeline run. It reads `caree
 
 ## Observability
 
-**Tooling:** LangSmith for trace capture. **Fallback:** structured JSON run log written locally on every run.
+**Tooling:** Phoenix (Arize) for local trace capture — open-source, no data leaves the machine. **Fallback:** structured JSON run log written locally on every run.
 
 **What the traces show:**
 - Parallel execution of `gap_analyzer` / `rag_retrieve` (visible as concurrent spans)

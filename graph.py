@@ -17,10 +17,15 @@ import rag_store
 
 load_dotenv()
 
-# LangSmith tracing is automatic when LANGCHAIN_API_KEY + LANGCHAIN_TRACING_V2 are set.
-# Set a default project name so runs are grouped correctly even without explicit .env config.
-os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
-os.environ.setdefault("LANGCHAIN_PROJECT", "cv-optimizer-agent")
+# Phoenix tracing — connects to a running `phoenix serve` instance.
+# Gracefully skipped if Phoenix is not installed or server is unreachable.
+try:
+    from phoenix.otel import register
+    from openinference.instrumentation.langchain import LangChainInstrumentor
+    register(project_name="cv-optimizer-agent")
+    LangChainInstrumentor().instrument()
+except Exception:
+    pass
 
 # ── Config ────────────────────────────────────────────────────────────────────
 SCORER_VERSION = "v1.0"

@@ -2,7 +2,8 @@ langgraph
 langchain-core
 langchain-ollama
 langchain-google-genai
-langsmith
+arize-phoenix
+openinference-instrumentation-langchain
 python-dotenv
 chromadb
 pytest

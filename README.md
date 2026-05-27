@@ -114,11 +114,20 @@ Valid outcomes: `contacted`, `rejected`, `no_response`. On the next run, `outcom
 
 ## Observability
 
-Traces are sent to [LangSmith](https://smith.langchain.com) automatically when `LANGCHAIN_API_KEY` is set. Each run produces:
+Traces are sent to [Phoenix](https://phoenix.arize.com) (local, open-source). Start the server once before running the pipeline:
+
+```bash
+phoenix serve
+# UI available at http://localhost:6006
+```
+
+Each run produces:
 
 - Parallel spans for `gap_analyzer` / `rag_retrieve`
 - N concurrent `score_baseline` spans (one per baseline)
 - Full scorer prompt visible per span, including injected gap and RAG context
+
+Phoenix is optional — if the server is not running, the pipeline continues without tracing.
 
 ---
 

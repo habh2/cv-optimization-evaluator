@@ -2,11 +2,9 @@
 .env
 
 # Input/output files (personal data)
-data/inputs/CV.md
-data/inputs/JobDescription.txt
-data/inputs/baselines/**/*.txt
-data/cache/
-data/outputs/
+
+data/
+
 
 # Runtime data
 fitness-history.json
